@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Esfera 3D Interativa - Pontos Comprável</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #000;
+        overflow: hidden;
+      }
+      #info {
+        position: absolute;
+        top: 15px;
+        left: 15px;
+        color: white;
+        background: rgba(0, 0, 0, 0.8);
+        padding: 15px;
+        border-radius: 8px;
+        z-index: 100;
+        font-size: 14px;
+      }
+      #controls {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        color: white;
+        background: rgba(0, 0, 0, 0.8);
+        padding: 15px;
+        border-radius: 8px;
+        z-index: 100;
+        font-size: 12px;
+      }
+      .status {
+        color: #00ff88;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <h3>🌍 Planeta Virtual</h3>
+      <div id="territories" class="status">Territórios: 0</div>
+      <div id="lastPurchase"></div>
+    </div>
+
+    <div id="controls">
+      <h4>🎮 Controles</h4>
+      <p><strong>Mouse:</strong> Rotacionar</p>
+      <p><strong>Scroll:</strong> Zoom</p>
+      <p><strong>Clique:</strong> Comprar território</p>
+      <br />
+      <label for="pointCount">Pontos: </label>
+      <select id="pointCount" onchange="changePointCount()">
+        <option value="1000">1.000 pontos</option>
+        <option value="2000" selected>2.000 pontos</option>
+        <option value="5000">5.000 pontos</option>
+        <option value="10000">10.000 pontos</option>
+        <option value="25000">25.000 pontos</option>
+        <option value="50000">50.000 pontos</option>
+      </select>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      // ===============================
+      // CENA, CÂMERA E RENDERER
+      // ===============================
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000510);
+
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
+      );
+      camera.position.set(0, 0, 3);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      // ILUMINAÇÃO
+      const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+      scene.add(ambientLight);
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      directionalLight.position.set(10, 10, 5);
+      scene.add(directionalLight);
+
+      // ESFERA BASE (wireframe)
+      const sphereGeometry = new THREE.SphereGeometry(1, 32, 32);
+      const sphereMaterial = new THREE.MeshBasicMaterial({
+        color: 0x1a1a3a,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
+      });
+      const sphereWireframe = new THREE.Mesh(sphereGeometry, sphereMaterial);
+
+      // ===============================
+      // SISTEMA DE PONTOS
+      // ===============================
+      let pointsSystem = null;
+      let ownedPoints = new Set();
+      let territoryCount = 0;
+      let pointPositions = [];
+
+      function generatePoints(count) {
+        if (pointsSystem) planetGroup.remove(pointsSystem);
+
+        // Geometria e materiais
+        const pointGeometry = new THREE.SphereGeometry(0.015, 6, 6);
+        const availableMaterial = new THREE.MeshLambertMaterial({
+          color: 0x4488ff,
+          emissive: 0x001122,
+        });
+
+        pointsSystem = new THREE.InstancedMesh(
+          pointGeometry,
+          availableMaterial,
+          count
+        );
+        pointPositions = [];
+        ownedPoints.clear();
+        territoryCount = 0;
+
+        const matrix = new THREE.Matrix4();
+        for (let i = 0; i < count; i++) {
+          // Distribuição fibonacci
+          const phi = Math.acos(-1 + (2 * i) / count);
+          const theta = Math.sqrt(count * Math.PI) * phi;
+          const x = Math.cos(theta) * Math.sin(phi);
+          const y = Math.sin(theta) * Math.sin(phi);
+          const z = Math.cos(phi);
+
+          pointPositions[i] = new THREE.Vector3(x, y, z);
+
+          matrix.setPosition(x, y, z);
+          pointsSystem.setMatrixAt(i, matrix);
+          pointsSystem.setColorAt(i, new THREE.Color(0x4488ff));
+        }
+
+        pointsSystem.instanceMatrix.needsUpdate = true;
+        if (pointsSystem.instanceColor)
+          pointsSystem.instanceColor.needsUpdate = true;
+
+        planetGroup.add(pointsSystem);
+        document.getElementById("territories").textContent = `Territórios: 0`;
+        document.getElementById(
+          "lastPurchase"
+        ).innerHTML = `<small>🔄 ${count.toLocaleString()} pontos gerados!</small>`;
+      }
+
+      // ===============================
+      // GRUPO PLANETA
+      // ===============================
+      const planetGroup = new THREE.Group();
+      planetGroup.add(sphereWireframe);
+      scene.add(planetGroup);
+
+      // ===============================
+      // CONTROLES MANUAIS
+      // ===============================
+      let isMouseDown = false;
+      let mouseX = 0,
+        mouseY = 0;
+      let targetRotationX = 0,
+        targetRotationY = 0;
+      let currentRotationX = 0,
+        currentRotationY = 0;
+
+      renderer.domElement.addEventListener("mousedown", (event) => {
+        isMouseDown = true;
+        mouseX = event.clientX;
+        mouseY = event.clientY;
+      });
+
+      renderer.domElement.addEventListener(
+        "mouseup",
+        () => (isMouseDown = false)
+      );
+
+      renderer.domElement.addEventListener("mousemove", (event) => {
+        if (!isMouseDown) return;
+        const deltaX = event.clientX - mouseX;
+        const deltaY = event.clientY - mouseY;
+        targetRotationY += deltaX * 0.01;
+        targetRotationX += deltaY * 0.01;
+        mouseX = event.clientX;
+        mouseY = event.clientY;
+      });
+
+      renderer.domElement.addEventListener("wheel", (event) => {
+        const zoomSpeed = 0.1;
+        const minDistance = 1.5;
+        const maxDistance = 8;
+        if (event.deltaY > 0) camera.position.multiplyScalar(1 + zoomSpeed);
+        else camera.position.multiplyScalar(1 - zoomSpeed);
+
+        const distance = camera.position.length();
+        if (distance < minDistance)
+          camera.position.normalize().multiplyScalar(minDistance);
+        else if (distance > maxDistance)
+          camera.position.normalize().multiplyScalar(maxDistance);
+        event.preventDefault();
+      });
+
+      // ===============================
+      // CLIQUE PARA COMPRAR TERRITÓRIO
+      // ===============================
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      let isClicking = false;
+
+      renderer.domElement.addEventListener("click", (event) => {
+        if (isClicking || !pointsSystem) return;
+        isClicking = true;
+
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObject(pointsSystem);
+
+        if (intersects.length > 0) {
+          const instanceId = intersects[0].instanceId;
+          if (!ownedPoints.has(instanceId)) {
+            ownedPoints.add(instanceId);
+            territoryCount++;
+
+            pointsSystem.setColorAt(instanceId, new THREE.Color(0x00ff44));
+            pointsSystem.instanceColor.needsUpdate = true;
+
+            const matrix = new THREE.Matrix4();
+            pointsSystem.getMatrixAt(instanceId, matrix);
+            const position = pointPositions[instanceId];
+            matrix.setPosition(position.x, position.y, position.z);
+            matrix.scale(new THREE.Vector3(1.3, 1.3, 1.3));
+            pointsSystem.setMatrixAt(instanceId, matrix);
+            pointsSystem.instanceMatrix.needsUpdate = true;
+
+            document.getElementById(
+              "territories"
+            ).textContent = `Territórios: ${territoryCount}`;
+            document.getElementById(
+              "lastPurchase"
+            ).innerHTML = `<small style="color: #00ff88;">✓ Território #${instanceId} comprado!</small>`;
+          } else {
+            document.getElementById(
+              "lastPurchase"
+            ).innerHTML = `<small style="color: #ffaa00;">⚠ Território #${instanceId} já é seu!</small>`;
+          }
+        }
+
+        setTimeout(() => (isClicking = false), 100);
+      });
+
+      // ===============================
+      // FUNÇÃO MUDAR QUANTIDADE DE PONTOS
+      // ===============================
+      function changePointCount() {
+        const count = parseInt(document.getElementById("pointCount").value);
+        generatePoints(count);
+      }
+
+      // ===============================
+      // ANIMAÇÃO
+      // ===============================
+      function animate() {
+        requestAnimationFrame(animate);
+
+        currentRotationX += (targetRotationX - currentRotationX) * 0.1;
+        currentRotationY += (targetRotationY - currentRotationY) * 0.1;
+
+        const distance = camera.position.length();
+        camera.position.x =
+          distance * Math.sin(currentRotationY) * Math.cos(currentRotationX);
+        camera.position.y = distance * Math.sin(currentRotationX);
+        camera.position.z =
+          distance * Math.cos(currentRotationY) * Math.cos(currentRotationX);
+
+        camera.lookAt(0, 0, 0);
+        planetGroup.rotation.y += 0.002;
+
+        renderer.render(scene, camera);
+      }
+
+      // ===============================
+      // RESPONSIVIDADE
+      // ===============================
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // ===============================
+      // INICIALIZAÇÃO
+      // ===============================
+      generatePoints(2000);
+      animate();
+
+      // Controle por toque no mobile
+      let touchStartX = 0,
+        touchStartY = 0;
+      renderer.domElement.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 1) {
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+      });
+
+      renderer.domElement.addEventListener("touchmove", (e) => {
+        if (e.touches.length === 1) {
+          const deltaX = e.touches[0].clientX - touchStartX;
+          const deltaY = e.touches[0].clientY - touchStartY;
+          targetRotationY += deltaX * 0.01;
+          targetRotationX += deltaY * 0.01;
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+      });
+
+      // Pinch para zoom
+      let initialDistance = 0;
+      renderer.domElement.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 2) {
+          initialDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+        }
+      });
+
+      renderer.domElement.addEventListener("touchmove", (e) => {
+        if (e.touches.length === 2) {
+          const newDistance = Math.hypot(
+            e.touches[0].clientX - e.touches[1].clientX,
+            e.touches[0].clientY - e.touches[1].clientY
+          );
+          const zoomSpeed = 0.005;
+          if (initialDistance !== 0) {
+            if (newDistance > initialDistance)
+              camera.position.multiplyScalar(1 - zoomSpeed);
+            else camera.position.multiplyScalar(1 + zoomSpeed);
+          }
+          initialDistance = newDistance;
+        }
+      });
+    </script>
+  </body>
+</html>
